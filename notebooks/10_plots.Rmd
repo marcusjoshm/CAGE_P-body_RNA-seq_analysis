@@ -1,0 +1,199 @@
+---
+title: "Notebook 10: Reproduce Scatter Plots"
+output: pdf_document
+---
+
+# Cap Index vs P-body Enrichment Scatter Plots
+
+Recreate the three reference scatter plots from Jason's analysis using our
+independently processed data.
+
+**All plots share:**
+- X-axis: `Pub_Log2FC` (published P-body enrichment log2 fold-change)
+- Y-axis: `Cap_index` on pseudo-log10 scale
+- Magenta dashed horizontal line at Cap_index = 0.1
+- Black dashed vertical line at Pub_Log2FC = 0
+- GAPDH labeled with black diamond
+
+```{r setup, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(scales)
+
+# Load our processed data (from notebook 08)
+dat <- read_csv("../data/processed/08_hub_cage_depmap_impc.csv")
+cat(sprintf("Loaded %d genes\n", nrow(dat)))
+
+# Identify the Pub_Log2FC column
+pub_col <- grep("Pub_Log2FC|RNA enrichment.*log2", names(dat), value = TRUE)[1]
+if (is.na(pub_col)) {
+  # Try exact match
+  pub_col <- "Pub_Log2FC"
+}
+cat(sprintf("Using Pub_Log2FC column: %s\n", pub_col))
+
+# Identify the gene name column
+gene_col <- grep("Associated Gene Name|gene_name", names(dat), value = TRUE)[1]
+cat(sprintf("Using gene name column: %s\n", gene_col))
+
+# Rename for convenience
+dat$Pub_Log2FC <- dat[[pub_col]]
+dat$gene_name <- dat[[gene_col]]
+
+# Find GAPDH
+gapdh <- dat %>% filter(gene_name == "GAPDH")
+cat(sprintf("GAPDH: Pub_Log2FC=%.2f, Cap_index=%.4f\n",
+            gapdh$Pub_Log2FC[1], gapdh$Cap_index[1]))
+
+# Create output directory
+dir.create("../figures", showWarnings = FALSE)
+```
+
+## Base plot function
+
+```{r base-plot-fn}
+make_cap_scatter <- function(data, highlight_data = NULL,
+                              highlight_color = "green",
+                              highlight_label = "",
+                              cytosol_thresh = 30,
+                              title_suffix = "") {
+  # Filter to cytosol threshold
+  plot_data <- data %>% filter(Cytosol_TPM >= cytosol_thresh)
+
+  # Add small constant for log scale (handle zeros)
+  plot_data$Cap_index_plot <- plot_data$Cap_index + 1e-4
+
+  p <- ggplot(plot_data, aes(x = Pub_Log2FC, y = Cap_index_plot)) +
+    # Gray background points
+    geom_point(color = "gray70", size = 0.5, alpha = 0.5) +
+
+    # Reference lines
+    geom_hline(yintercept = 0.1, linetype = "dashed", color = "magenta", linewidth = 0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black", linewidth = 0.3) +
+
+    # Pseudo-log scale for y-axis
+    scale_y_continuous(
+      trans = pseudo_log_trans(sigma = 0.01, base = 10),
+      breaks = c(0, 0.001, 0.01, 0.1, 0.5, 1, 2, 5, 10, 50),
+      labels = c("0", "0.001", "0.01", "0.1", "0.5", "1", "2", "5", "10", "50")
+    ) +
+
+    labs(
+      x = "Published P-body Enrichment (Log2FC)",
+      y = "Cap Index (CAGE TPM / Cytosol TPM)",
+      title = paste0("Cap Index vs P-body Enrichment", title_suffix),
+      subtitle = paste0("Cytosol_TPM >= ", cytosol_thresh)
+    ) +
+
+    theme_minimal(base_size = 10) +
+    theme(
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(size = 11, face = "bold")
+    )
+
+  # Add highlighted points
+  if (!is.null(highlight_data) && nrow(highlight_data) > 0) {
+    highlight_data$Cap_index_plot <- highlight_data$Cap_index + 1e-4
+    p <- p + geom_point(
+      data = highlight_data,
+      aes(x = Pub_Log2FC, y = Cap_index_plot),
+      color = highlight_color, size = 0.8, alpha = 0.7
+    )
+  }
+
+  # Add GAPDH label
+  gapdh_plot <- plot_data %>% filter(gene_name == "GAPDH")
+  if (nrow(gapdh_plot) > 0) {
+    p <- p + geom_point(
+      data = gapdh_plot,
+      aes(x = Pub_Log2FC, y = Cap_index_plot),
+      shape = 18, size = 3, color = "black"
+    ) +
+    annotate(
+      "text",
+      x = gapdh_plot$Pub_Log2FC[1] + 0.3,
+      y = gapdh_plot$Cap_index_plot[1],
+      label = "GAPDH", size = 3, hjust = 0
+    )
+  }
+
+  return(p)
+}
+```
+
+## Plot 1: Common Essential Genes (Green)
+
+Filter: Cytosol_TPM >= 30. Common Essential genes highlighted in green.
+
+```{r plot1, fig.width=8, fig.height=6}
+essential <- dat %>% filter(DepMap_Common_Essential == 1, Cytosol_TPM >= 30)
+
+p1 <- make_cap_scatter(
+  dat,
+  highlight_data = essential,
+  highlight_color = "darkgreen",
+  highlight_label = "Common Essential",
+  cytosol_thresh = 30,
+  title_suffix = " — Common Essential (green)"
+)
+
+print(p1)
+ggsave("../figures/CapIndex_v_PubLog2FC_CommonEssential.pdf", p1,
+       width = 8, height = 6)
+```
+
+## Plot 2: Strongly Selective Genes (Orchid)
+
+Filter: Cytosol_TPM >= 30. Strongly Selective genes highlighted in orchid.
+
+```{r plot2, fig.width=8, fig.height=6}
+selective <- dat %>% filter(DepMap_Strongly_Selective == 1, Cytosol_TPM >= 30)
+
+p2 <- make_cap_scatter(
+  dat,
+  highlight_data = selective,
+  highlight_color = "orchid",
+  highlight_label = "Strongly Selective",
+  cytosol_thresh = 30,
+  title_suffix = " — Strongly Selective (orchid)"
+)
+
+print(p2)
+ggsave("../figures/CapIndex_v_PubLog2FC_StronglySelective.pdf", p2,
+       width = 8, height = 6)
+```
+
+## Plot 3: Embryonic Lethal Orthologs (Red)
+
+Filter: Cytosol_TPM >= 5. IMPC embryonic lethal orthologs highlighted in red.
+
+```{r plot3, fig.width=8, fig.height=6}
+lethal <- dat %>% filter(IMPC_Embryonic_Lethal_Ortholog == 1, Cytosol_TPM >= 5)
+
+p3 <- make_cap_scatter(
+  dat,
+  highlight_data = lethal,
+  highlight_color = "red",
+  highlight_label = "Embryonic Lethal",
+  cytosol_thresh = 5,
+  title_suffix = " — Embryonic Lethal Orthologs (red)"
+)
+
+print(p3)
+ggsave("../figures/CapIndex_v_PubLog2FC_EmbryonicLethal.pdf", p3,
+       width = 8, height = 6)
+```
+
+## Summary
+
+```{r summary}
+cat("Plots saved to ../figures/\n")
+cat("Compare against reference PDFs in ../reference/\n")
+cat(sprintf("\nPlot 1: %d common essential genes highlighted (Cytosol >= 30)\n",
+            nrow(essential)))
+cat(sprintf("Plot 2: %d strongly selective genes highlighted (Cytosol >= 30)\n",
+            nrow(selective)))
+cat(sprintf("Plot 3: %d embryonic lethal orthologs highlighted (Cytosol >= 5)\n",
+            nrow(lethal)))
+```
